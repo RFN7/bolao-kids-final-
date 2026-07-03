@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -8,91 +9,168 @@ from app.modules.football import external_client
 from app.modules.football.models import Competition, Game, Round, Team
 from app.shared.exceptions import AppException
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Sync
 # ---------------------------------------------------------------------------
+
+def _upsert_team(db: Session, data: dict, now: datetime) -> Team:
+    team = db.query(Team).filter(Team.external_api_id == data["external_api_id"]).first()
+    if team is None:
+        team = Team(
+            external_api_id=data["external_api_id"],
+            name=data["name"],
+            crest_url=data.get("crest_url"),
+            country="Brazil",
+        )
+        db.add(team)
+    else:
+        team.name = data["name"]
+        team.crest_url = data.get("crest_url")
+        team.updated_at = now
+    db.flush()
+    return team
+
+
+def _upsert_competition(db: Session, data: dict) -> Competition:
+    comp = (
+        db.query(Competition)
+        .filter(Competition.external_api_id == data["external_api_id"])
+        .first()
+    )
+    if comp is None:
+        comp = Competition(**data)
+        db.add(comp)
+    else:
+        comp.name = data["name"]
+        comp.season = data["season"]
+        comp.type = data["type"]
+    db.flush()
+    return comp
+
+
+def _upsert_games(db: Session, comp: Competition, games: list[dict], now: datetime) -> int:
+    """Upserts teams, round, and games for a batch of parsed fixtures.
+    Returns how many games were upserted."""
+    count = 0
+    for g in games:
+        home_team = _upsert_team(db, g["home_team"], now)
+        away_team = _upsert_team(db, g["away_team"], now)
+
+        round_name = g.get("round_name") or "Rodada atual"
+        round_ = (
+            db.query(Round)
+            .filter(Round.competition_id == comp.id, Round.name == round_name)
+            .first()
+        )
+        if round_ is None:
+            round_ = Round(competition_id=comp.id, name=round_name)
+            db.add(round_)
+            db.flush()
+
+        game = db.query(Game).filter(Game.external_api_id == g["external_api_id"]).first()
+        if game is None:
+            game = Game(
+                external_api_id=g["external_api_id"],
+                round_id=round_.id,
+                competition_id=comp.id,
+                home_team_id=home_team.id,
+                away_team_id=away_team.id,
+                kickoff_at=g["kickoff_at"],
+                status=g["status"],
+                home_score=g["home_score"],
+                away_score=g["away_score"],
+                locks_at=g["locks_at"],
+            )
+            db.add(game)
+        else:
+            game.round_id = round_.id
+            game.home_team_id = home_team.id
+            game.away_team_id = away_team.id
+            game.kickoff_at = g["kickoff_at"]
+            game.status = g["status"]
+            game.home_score = g["home_score"]
+            game.away_score = g["away_score"]
+            game.locks_at = g["locks_at"]
+            game.updated_at = now
+        count += 1
+    return count
+
 
 def sync_games() -> None:
     from app.database import SessionLocal
 
     db: Session = SessionLocal()
     try:
-        data = external_client.fetch_games()
         now = datetime.now(timezone.utc)
 
-        # --- teams ---
-        team_map: dict[str, Team] = {}
-        for t in data["teams"]:
-            team = db.query(Team).filter(Team.external_api_id == t["external_api_id"]).first()
-            if team is None:
-                team = Team(**t)
-                db.add(team)
-            else:
-                team.name = t["name"]
-                team.short_name = t["short_name"]
-                team.crest_url = t["crest_url"]
-                team.country = t["country"]
-                team.updated_at = now
-            db.flush()
-            team_map[t["external_api_id"]] = team
+        for c in external_client.fetch_competitions():
+            comp = _upsert_competition(db, c)
 
-        # --- competition ---
-        c = data["competition"]
-        comp = db.query(Competition).filter(Competition.external_api_id == c["external_api_id"]).first()
-        if comp is None:
-            comp = Competition(**c)
-            db.add(comp)
-        else:
-            comp.name = c["name"]
-            comp.season = c["season"]
-            comp.type = c["type"]
-        db.flush()
-
-        # --- round ---
-        r = data["round"]
-        round_ = (
-            db.query(Round)
-            .filter(Round.competition_id == comp.id, Round.name == r["name"])
-            .first()
-        )
-        if round_ is None:
-            round_ = Round(competition_id=comp.id, **r)
-            db.add(round_)
-        else:
-            round_.start_date = r["start_date"]
-            round_.end_date = r["end_date"]
-        db.flush()
-
-        # --- games ---
-        for g in data["games"]:
-            home_team = team_map[g["home_team_external_id"]]
-            away_team = team_map[g["away_team_external_id"]]
-
-            game = db.query(Game).filter(Game.external_api_id == g["external_api_id"]).first()
-            if game is None:
-                game = Game(
-                    external_api_id=g["external_api_id"],
-                    round_id=round_.id,
-                    competition_id=comp.id,
-                    home_team_id=home_team.id,
-                    away_team_id=away_team.id,
-                    kickoff_at=g["kickoff_at"],
-                    status=g["status"],
-                    home_score=g["home_score"],
-                    away_score=g["away_score"],
-                    locks_at=g["locks_at"],
+            current_round = external_client.fetch_current_round(
+                c["external_api_id"], season=2024
+            )
+            if not current_round:
+                logger.info(
+                    "No current round for competition %s (%s), skipping",
+                    c["external_api_id"],
+                    c["name"],
                 )
-                db.add(game)
-            else:
-                game.kickoff_at = g["kickoff_at"]
-                game.status = g["status"]
-                game.home_score = g["home_score"]
-                game.away_score = g["away_score"]
-                game.locks_at = g["locks_at"]
-                game.updated_at = now
+                continue
+
+            games = external_client.fetch_games(
+                c["external_api_id"], season=2024, round=current_round
+            )
+            _upsert_games(db, comp, games, now)
 
         db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def sync_specific_round(league_id: int | str, season: int, round_name: str) -> None:
+    """One-off helper to sync a single known round directly, bypassing
+    fetch_current_round. Useful to validate the real API-Football
+    integration against a round that actually has fixtures, since
+    `current=true` only resolves for a season that is presently in progress.
+    """
+    from app.database import SessionLocal
+
+    db: Session = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+
+        comp = (
+            db.query(Competition)
+            .filter(Competition.external_api_id == str(league_id))
+            .first()
+        )
+        if comp is None:
+            comp = Competition(
+                external_api_id=str(league_id),
+                name=f"League {league_id}",
+                season=str(season),
+                type="league",
+            )
+            db.add(comp)
+            db.flush()
+
+        games = external_client.fetch_games(league_id, season=season, round=round_name)
+        count = _upsert_games(db, comp, games, now)
+
+        db.commit()
+        logger.info(
+            "sync_specific_round: upserted %d games for league=%s season=%s round=%s",
+            count,
+            league_id,
+            season,
+            round_name,
+        )
     except Exception:
         db.rollback()
         raise
