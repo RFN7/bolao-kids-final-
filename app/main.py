@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,6 +12,8 @@ from app.modules.predictions.router import router as predictions_router
 from app.modules.ranking.router import router as ranking_router
 from app.shared.exceptions import AppException, app_exception_handler
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,7 +21,13 @@ async def lifespan(app: FastAPI):
     from app.modules.curiosities.generator import generate_for_all_games
     from app.modules.football.service import sync_games
 
-    sync_games()
+    logger.info("lifespan: iniciando sync_games() no startup")
+    try:
+        sync_games()
+        logger.info("lifespan: sync_games() concluído")
+    except Exception:
+        logger.exception("lifespan: sync_games() lançou exceção durante o startup")
+        raise
     generate_for_all_games()
     lock_job.start()
     yield
