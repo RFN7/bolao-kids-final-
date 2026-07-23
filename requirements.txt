@@ -12,3 +12,4 @@ apscheduler
 pytest
 httpx
 python-dotenv
+anthropic>=0.30.0
