@@ -17,6 +17,9 @@ RATE_LIMIT_SLEEP_SECONDS = 1
 # Brasileirão Série A, Copa do Brasil
 ALLOWED_LEAGUE_IDS = {71, 73}
 
+# Temporada padrão de todas as consultas; configurável por FOOTBALL_SEASON.
+_DEFAULT_SEASON = settings.FOOTBALL_SEASON
+
 STATUS_MAP = {
     "NS": "scheduled",
     "1H": "live",
@@ -146,7 +149,7 @@ def _mock_games() -> list[dict]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch_competitions(season: int = 2024) -> list[dict]:
+def fetch_competitions(season: int = _DEFAULT_SEASON) -> list[dict]:
     data = _get("/leagues", {"country": "Brazil", "season": season})
     if data is None:
         return _mock_competitions()
@@ -169,14 +172,14 @@ def fetch_competitions(season: int = 2024) -> list[dict]:
     return competitions or _mock_competitions()
 
 
-def fetch_rounds(league_id: int | str, season: int = 2024) -> list[str]:
+def fetch_rounds(league_id: int | str, season: int = _DEFAULT_SEASON) -> list[str]:
     data = _get("/fixtures/rounds", {"league": league_id, "season": season})
     if data is None:
         return []
     return data.get("response", [])
 
 
-def fetch_current_round(league_id: int | str, season: int = 2024) -> Optional[str]:
+def fetch_current_round(league_id: int | str, season: int = _DEFAULT_SEASON) -> Optional[str]:
     data = _get(
         "/fixtures/rounds",
         {"league": league_id, "season": season, "current": "true"},
@@ -189,7 +192,7 @@ def fetch_current_round(league_id: int | str, season: int = 2024) -> Optional[st
 
 def fetch_games(
     league_id: int | str,
-    season: int = 2024,
+    season: int = _DEFAULT_SEASON,
     round: Optional[str] = None,
     next: Optional[int] = None,
 ) -> list[dict]:
@@ -240,7 +243,7 @@ def fetch_games(
     return games
 
 
-def fetch_standings(league_id: int | str, season: int = 2026) -> list[dict]:
+def fetch_standings(league_id: int | str, season: int = _DEFAULT_SEASON) -> list[dict]:
     data = _get("/standings", {"league": league_id, "season": season})
     if data is None:
         return []

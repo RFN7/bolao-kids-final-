@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     ENVIRONMENT: str = "local"
     FOOTBALL_API_KEY: str = ""
+    # Temporada consultada na API-Football. 2024 como padrão porque é a que o
+    # plano atual da chave cobre; dá para apontar para a temporada corrente por
+    # variável de ambiente, sem mexer no código.
+    FOOTBALL_SEASON: int = 2024
     ANTHROPIC_API_KEY: str = ""
 
     model_config = {"env_file": ".env"}

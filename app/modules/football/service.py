@@ -5,6 +5,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import settings
 from app.modules.football import external_client
 from app.modules.football.models import Competition, Game, Round, Team
 from app.shared.exceptions import AppException
@@ -99,8 +100,8 @@ def _upsert_games(db: Session, comp: Competition, games: list[dict], now: dateti
     return count
 
 
-# Temporada 2024 encerrada -> fetch_current_round(current=true) não resolve mais.
-# Sincroniza esta rodada como fallback para termos dados de exemplo em produção.
+# Se a temporada configurada já estiver encerrada, fetch_current_round(current=true)
+# não resolve; sincroniza esta rodada como fallback para haver dados de exemplo.
 FALLBACK_ROUND = "Regular Season - 1"
 
 
@@ -111,8 +112,13 @@ def sync_games() -> None:
     try:
         now = datetime.now(timezone.utc)
 
-        competitions = external_client.fetch_competitions()
-        logger.info("sync_games: %d competições retornadas pela API", len(competitions))
+        season = settings.FOOTBALL_SEASON
+        competitions = external_client.fetch_competitions(season=season)
+        logger.info(
+            "sync_games: %d competições retornadas pela API para a temporada %s",
+            len(competitions),
+            season,
+        )
 
         for c in competitions:
             comp = _upsert_competition(db, c)
@@ -123,7 +129,7 @@ def sync_games() -> None:
             )
 
             current_round = external_client.fetch_current_round(
-                c["external_api_id"], season=2024
+                c["external_api_id"], season=season
             )
             if not current_round:
                 logger.warning(
@@ -142,7 +148,7 @@ def sync_games() -> None:
                 )
 
             games = external_client.fetch_games(
-                c["external_api_id"], season=2024, round=current_round
+                c["external_api_id"], season=season, round=current_round
             )
             logger.info(
                 "sync_games: %d jogos retornados para competição %s, rodada %s",
